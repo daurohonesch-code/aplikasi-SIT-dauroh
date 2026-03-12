@@ -1,0 +1,562 @@
+import React, { useState, useRef, useEffect } from 'react';
+import { LayoutDashboard, Package, Plus, Edit, Trash2, Save, X, Box, CheckCircle, AlertCircle, ExternalLink, Camera, QrCode, Loader2 } from 'lucide-react';
+
+// === PASTE URL GOOGLE APPS SCRIPT ANDA DI SINI ===
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbwk-yIJaiflJq0jEuBk1iYy62kqXItSNIK0DDxiEKp5YqGGgudRgjQaZJLcysn_N7Pogw/exec';
+
+export default function App() {
+  const [assets, setAssets] = useState([]);
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [isLoading, setIsLoading] = useState(false); // State untuk efek loading saat ambil/simpan data
+  
+  const emptyForm = { 
+    id: null, // id internal (nomor baris di gsheet)
+    assetId: '', 
+    serialNumber: '', 
+    name: '', 
+    location: '', 
+    fundingSource: '', 
+    purchaseDate: '', 
+    status: 'Baik', 
+    photoLink: '' 
+  };
+  
+  const [formData, setFormData] = useState(emptyForm);
+  const [isEditing, setIsEditing] = useState(false);
+
+  // --- STATE & REF UNTUK FITUR KAMERA ---
+  const videoRef = useRef(null);
+  const [showScanner, setShowScanner] = useState(false);
+  const [showCamera, setShowCamera] = useState(false);
+  const [stream, setStream] = useState(null);
+
+  // --- FETCH DATA DARI GOOGLE SHEETS ---
+  const fetchAssets = async () => {
+    if(GAS_URL.includes('GANTI_DENGAN')) return; // Mencegah fetch jika URL belum diganti
+    setIsLoading(true);
+    try {
+      const response = await fetch(GAS_URL);
+      const result = await response.json();
+      if (result.status === 'success') {
+        setAssets(result.data);
+      }
+    } catch (error) {
+      console.error('Error fetching data:', error);
+      alert('Gagal mengambil data dari server.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Panggil fetch saat aplikasi pertama kali dimuat
+  useEffect(() => {
+    fetchAssets();
+  }, []);
+
+  // Kalkulasi Dashboard
+  const totalAssets = assets.length;
+  const assetsBaik = assets.filter(a => a.status === 'Baik').length;
+  const assetsRusak = assets.filter(a => a.status === 'Rusak').length;
+
+  // Handler Input Text
+  const handleInputChange = (e) => {
+    const { name, value } = e.target;
+    setFormData({ ...formData, [name]: value });
+  };
+
+  // --- FUNGSI KAMERA DAN SCANNER ---
+  const startCamera = async () => {
+    try {
+      const mediaStream = await navigator.mediaDevices.getUserMedia({ 
+        video: { facingMode: 'environment' } 
+      });
+      setStream(mediaStream);
+      if (videoRef.current) {
+        videoRef.current.srcObject = mediaStream;
+      }
+    } catch (error) {
+      console.error("Gagal mengakses kamera:", error);
+      alert("Tidak dapat mengakses kamera. Pastikan izin kamera diberikan di browser Anda.");
+    }
+  };
+
+  const stopCamera = () => {
+    if (stream) {
+      stream.getTracks().forEach(track => track.stop());
+      setStream(null);
+    }
+  };
+
+  const handleOpenScanner = () => {
+    setShowScanner(true);
+    setTimeout(startCamera, 100);
+  };
+
+  const handleOpenCamera = () => {
+    setShowCamera(true);
+    setTimeout(startCamera, 100);
+  };
+
+  const handleCloseModal = () => {
+    stopCamera();
+    setShowScanner(false);
+    setShowCamera(false);
+  };
+
+  const handleSimulateScan = () => {
+    const randomSN = `SN-SCAN-${Math.floor(Math.random() * 10000)}`;
+    setFormData({ ...formData, serialNumber: randomSN });
+    handleCloseModal();
+  };
+
+  const handleCapturePhoto = () => {
+    if (!videoRef.current) return;
+    const video = videoRef.current;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const barHeight = 100;
+    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+    ctx.fillRect(0, canvas.height - barHeight, canvas.width, barHeight);
+
+    ctx.font = "20px Arial";
+    ctx.fillStyle = "white";
+    ctx.fillText(`Asset ID : ${formData.assetId || '-'}`, 20, canvas.height - 70);
+    ctx.fillText(`Nama     : ${formData.name || '-'}`, 20, canvas.height - 40);
+    ctx.fillText(`Waktu    : ${new Date().toLocaleString('id-ID')}`, 20, canvas.height - 10);
+
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+    setFormData({ ...formData, photoLink: dataUrl });
+    handleCloseModal();
+  };
+
+  // --- CRUD FUNCTIONS KE GOOGLE SHEETS ---
+  const handleAddNew = () => {
+    setFormData(emptyForm);
+    setIsEditing(false);
+    setActiveTab('form');
+  };
+
+  const handleEdit = (asset) => {
+    setFormData({ ...asset });
+    setIsEditing(true);
+    setActiveTab('form');
+  };
+
+  const handleSave = async (e) => {
+    e.preventDefault();
+    if(GAS_URL.includes('GANTI_DENGAN')) {
+      alert("Masukkan URL GAS terlebih dahulu di baris 5.");
+      return;
+    }
+    
+    setIsLoading(true);
+    const actionType = isEditing ? 'update' : 'create';
+    
+    try {
+      // Mengirim POST request ke Google Apps Script
+      await fetch(GAS_URL, {
+        method: 'POST',
+        // mode: 'no-cors' dihindari jika ingin membaca response JSON dari GAS
+        body: JSON.stringify({ action: actionType, data: formData })
+      });
+      
+      // Ambil data terbaru dari spreadsheet setelah berhasil simpan
+      await fetchAssets();
+      setActiveTab('list');
+    } catch (error) {
+      console.error('Error saving data:', error);
+      alert('Terjadi kesalahan saat menyimpan data. Cek koneksi Anda.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleDelete = async (id) => {
+    if(GAS_URL.includes('GANTI_DENGAN')) {
+      alert("Masukkan URL GAS terlebih dahulu di baris 5.");
+      return;
+    }
+
+    if (!window.confirm("Yakin ingin menghapus aset ini?")) return;
+
+    setIsLoading(true);
+    try {
+      await fetch(GAS_URL, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'delete', data: { id: id } })
+      });
+      await fetchAssets();
+    } catch (error) {
+      console.error('Error deleting data:', error);
+      alert('Terjadi kesalahan saat menghapus data.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // --- KOMPONEN VIEW ---
+  const DashboardView = () => (
+    <div className="space-y-6 relative">
+      <h2 className="text-2xl font-bold text-gray-800">Ringkasan Aset</h2>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex items-center space-x-4">
+          <div className="p-3 bg-blue-100 text-blue-600 rounded-lg">
+            <Box size={24} />
+          </div>
+          <div>
+            <p className="text-sm text-gray-500 font-medium">Total Aset</p>
+            <p className="text-2xl font-bold text-gray-800">{totalAssets}</p>
+          </div>
+        </div>
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex items-center space-x-4">
+          <div className="p-3 bg-green-100 text-green-600 rounded-lg">
+            <CheckCircle size={24} />
+          </div>
+          <div>
+            <p className="text-sm text-gray-500 font-medium">Kondisi Baik</p>
+            <p className="text-2xl font-bold text-gray-800">{assetsBaik}</p>
+          </div>
+        </div>
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex items-center space-x-4">
+          <div className="p-3 bg-red-100 text-red-600 rounded-lg">
+            <AlertCircle size={24} />
+          </div>
+          <div>
+            <p className="text-sm text-gray-500 font-medium">Kondisi Rusak</p>
+            <p className="text-2xl font-bold text-gray-800">{assetsRusak}</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  const AssetListView = () => (
+    <div className="space-y-4">
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold text-gray-800">Daftar Aset</h2>
+        <button 
+          onClick={handleAddNew}
+          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center space-x-2 text-sm transition-colors"
+        >
+          <Plus size={16} />
+          <span>Tambah Aset</span>
+        </button>
+      </div>
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden relative">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse min-w-[1000px]">
+            <thead>
+              <tr className="bg-gray-50 text-gray-600 text-sm border-b border-gray-100">
+                <th className="p-4 font-medium">Asset ID</th>
+                <th className="p-4 font-medium">Serial Number</th>
+                <th className="p-4 font-medium">Nama Barang</th>
+                <th className="p-4 font-medium">Lokasi</th>
+                <th className="p-4 font-medium">Sumber Dana</th>
+                <th className="p-4 font-medium">Tanggal Beli</th>
+                <th className="p-4 font-medium">Status</th>
+                <th className="p-4 font-medium">Foto</th>
+                <th className="p-4 font-medium text-center">Aksi</th>
+              </tr>
+            </thead>
+            <tbody>
+              {assets.length === 0 && !isLoading ? (
+                <tr>
+                  <td colSpan="9" className="p-4 text-center text-gray-500">Tidak ada data aset.</td>
+                </tr>
+              ) : (
+                assets.map((asset) => (
+                  <tr key={asset.id} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors text-sm">
+                    <td className="p-4 font-medium text-gray-800">{asset.assetId}</td>
+                    <td className="p-4 text-gray-600">{asset.serialNumber}</td>
+                    <td className="p-4 text-gray-800 font-medium">{asset.name}</td>
+                    <td className="p-4 text-gray-600">{asset.location}</td>
+                    <td className="p-4 text-gray-600">{asset.fundingSource}</td>
+                    <td className="p-4 text-gray-600">{asset.purchaseDate}</td>
+                    <td className="p-4">
+                      <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                        asset.status === 'Baik' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                      }`}>
+                        {asset.status}
+                      </span>
+                    </td>
+                    <td className="p-4">
+                      {asset.photoLink && asset.photoLink.startsWith('http') ? (
+                        <a 
+                          href={asset.photoLink} 
+                          target="_blank" 
+                          rel="noopener noreferrer" 
+                          className="block w-16 h-16 rounded-md overflow-hidden border border-gray-200 hover:opacity-80 transition-opacity"
+                          title="Klik untuk memperbesar"
+                        >
+                          <img 
+                            src={asset.photoLink} 
+                            alt={`Foto ${asset.name}`} 
+                            className="w-full h-full object-cover" 
+                          />
+                        </a>
+                      ) : (
+                        <div className="w-16 h-16 bg-gray-100 rounded-md border border-gray-200 flex items-center justify-center text-gray-400">
+                          -
+                        </div>
+                      )}
+                    </td>
+                    <td className="p-4 flex justify-center space-x-2">
+                      <button onClick={() => handleEdit(asset)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" disabled={isLoading}>
+                        <Edit size={16} />
+                      </button>
+                      <button onClick={() => handleDelete(asset.id)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors" disabled={isLoading}>
+                        <Trash2 size={16} />
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+
+  const AssetFormView = () => (
+    <div className="max-w-3xl mx-auto bg-white p-6 rounded-xl shadow-sm border border-gray-100 relative">
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="text-xl font-bold text-gray-800">{isEditing ? 'Edit Data Aset' : 'Tambah Aset Baru'}</h2>
+        <button onClick={() => setActiveTab('list')} className="text-gray-400 hover:text-gray-600">
+          <X size={20} />
+        </button>
+      </div>
+      
+      <form onSubmit={handleSave} className="space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Asset ID</label>
+            <input 
+              type="text" name="assetId" value={formData.assetId} onChange={handleInputChange} required
+              className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              placeholder="Contoh: AST-001"
+              disabled={isEditing} // Biasanya ID tidak boleh diubah jika sedang mode edit
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Serial Number</label>
+            <div className="flex space-x-2">
+              <input 
+                type="text" name="serialNumber" value={formData.serialNumber} onChange={handleInputChange} required
+                className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                placeholder="Scan atau ketik manual"
+              />
+              <button 
+                type="button" 
+                onClick={handleOpenScanner}
+                className="bg-slate-800 text-white p-2 rounded-lg hover:bg-slate-700 transition-colors"
+                title="Scan Barcode/QR"
+              >
+                <QrCode size={20} />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Nama Barang</label>
+          <input 
+            type="text" name="name" value={formData.name} onChange={handleInputChange} required
+            className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+            placeholder="Contoh: Laptop Dell XPS 13"
+          />
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Lokasi</label>
+            <input 
+              type="text" name="location" value={formData.location} onChange={handleInputChange} required
+              className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              placeholder="Contoh: Ruang Staff IT"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Sumber Dana</label>
+            <input 
+              type="text" name="fundingSource" value={formData.fundingSource} onChange={handleInputChange} required
+              className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              placeholder="Contoh: BOS 2024"
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Tanggal Pembelian</label>
+            <input 
+              type="date" name="purchaseDate" value={formData.purchaseDate} onChange={handleInputChange} required
+              className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+            <select 
+              name="status" value={formData.status} onChange={handleInputChange}
+              className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+            >
+              <option value="Baik">Baik</option>
+              <option value="Rusak">Rusak</option>
+            </select>
+          </div>
+        </div>
+
+        {/* INPUT FOTO DENGAN KAMERA WAJIB */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Foto Aset (Beserta Watermark)</label>
+          <div className="flex flex-col space-y-3">
+            <button 
+              type="button" 
+              onClick={handleOpenCamera}
+              className="w-full md:w-auto bg-blue-100 text-blue-700 px-4 py-3 rounded-lg flex items-center justify-center space-x-2 hover:bg-blue-200 transition-colors font-medium border border-blue-200"
+            >
+              <Camera size={20} />
+              <span>Buka Kamera HP & Ambil Foto</span>
+            </button>
+            
+            {/* Tampilan Preview Foto */}
+            {formData.photoLink && (
+              <div className="relative w-full md:w-1/2 border-2 border-dashed border-gray-300 rounded-lg overflow-hidden">
+                <img src={formData.photoLink} alt="Preview Aset" className="w-full h-auto object-cover" />
+                <button 
+                  type="button" 
+                  onClick={() => setFormData({...formData, photoLink: ''})}
+                  className="absolute top-2 right-2 bg-red-600 text-white p-1 rounded-full hover:bg-red-700"
+                  title="Hapus Foto"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            )}
+            <input type="hidden" name="photoLink" value={formData.photoLink} required />
+          </div>
+        </div>
+
+        <div className="pt-4 flex justify-end space-x-3">
+          <button 
+            type="button" onClick={() => setActiveTab('list')}
+            className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            Batal
+          </button>
+          <button 
+            type="submit" 
+            disabled={isLoading}
+            className={`px-4 py-2 text-white rounded-lg flex items-center space-x-2 transition-colors ${isLoading ? 'bg-blue-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
+          >
+            {isLoading ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+            <span>{isLoading ? 'Menyimpan...' : 'Simpan'}</span>
+          </button>
+        </div>
+      </form>
+
+      {/* MODAL SCANNER */}
+      {showScanner && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
+          <div className="bg-white rounded-xl overflow-hidden shadow-2xl w-full max-w-md">
+            <div className="p-4 bg-slate-900 text-white flex justify-between items-center">
+              <h3 className="font-bold">Scan Barcode / QR</h3>
+              <button onClick={handleCloseModal} className="text-gray-400 hover:text-white"><X size={20}/></button>
+            </div>
+            <div className="p-4 flex flex-col items-center space-y-4">
+              <div className="relative w-full aspect-square bg-black rounded-lg overflow-hidden flex items-center justify-center border-4 border-dashed border-blue-500/50">
+                <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover"></video>
+                <div className="absolute inset-0 border-2 border-red-500 m-12 opacity-50 rounded"></div>
+              </div>
+              <p className="text-sm text-center text-gray-600">Arahkan kamera ke Barcode/QR Code Serial Number.</p>
+              <button 
+                onClick={handleSimulateScan}
+                className="w-full bg-green-600 text-white py-3 rounded-lg font-medium hover:bg-green-700"
+              >
+                [Simulasi] Scan Berhasil
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL KAMERA FOTO */}
+      {showCamera && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
+          <div className="bg-white rounded-xl overflow-hidden shadow-2xl w-full max-w-md">
+            <div className="p-4 bg-slate-900 text-white flex justify-between items-center">
+              <h3 className="font-bold">Ambil Foto Aset</h3>
+              <button onClick={handleCloseModal} className="text-gray-400 hover:text-white"><X size={20}/></button>
+            </div>
+            <div className="p-4 flex flex-col items-center space-y-4">
+              <div className="relative w-full aspect-[3/4] md:aspect-video bg-black rounded-lg overflow-hidden flex items-center justify-center">
+                <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover"></video>
+                <div className="absolute bottom-0 left-0 right-0 h-24 bg-black/50 p-3 flex flex-col justify-center pointer-events-none">
+                   <p className="text-white text-xs font-mono">Asset ID : {formData.assetId || '-'}</p>
+                   <p className="text-white text-xs font-mono">Nama     : {formData.name || '-'}</p>
+                   <p className="text-white text-xs font-mono">Waktu    : {new Date().toLocaleString('id-ID')}</p>
+                </div>
+              </div>
+              <button 
+                onClick={handleCapturePhoto}
+                className="w-16 h-16 bg-blue-600 rounded-full flex items-center justify-center border-4 border-blue-200 hover:bg-blue-700 transition-colors"
+                title="Jepret Foto"
+              >
+                <Camera size={24} className="text-white" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex flex-col md:flex-row font-sans relative">
+      {/* Overlay Loading Global */}
+      {isLoading && (
+        <div className="fixed inset-0 z-50 bg-white/50 backdrop-blur-sm flex items-center justify-center">
+          <div className="flex flex-col items-center space-y-4">
+            <Loader2 size={48} className="animate-spin text-blue-600" />
+            <p className="text-blue-800 font-medium animate-pulse">Menghubungkan ke Database...</p>
+          </div>
+        </div>
+      )}
+
+      <aside className="w-full md:w-64 bg-slate-900 text-white p-6 shadow-xl z-10 flex-shrink-0">
+        <div className="flex items-center space-x-3 mb-8">
+          <div className="p-2 bg-blue-500 rounded-lg">
+            <Package size={24} className="text-white" />
+          </div>
+          <h1 className="text-xl font-bold tracking-wide">Sistem Aset</h1>
+        </div>
+        <nav className="space-y-2">
+          <button 
+            onClick={() => setActiveTab('dashboard')}
+            className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'dashboard' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}
+          >
+            <LayoutDashboard size={20} />
+            <span>Dashboard</span>
+          </button>
+          <button 
+            onClick={() => setActiveTab('list')}
+            className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'list' ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'}`}
+          >
+            <Box size={20} />
+            <span>Data Aset</span>
+          </button>
+        </nav>
+      </aside>
+
+      <main className="flex-1 p-6 md:p-8 overflow-y-auto relative">
+        {activeTab === 'dashboard' && <DashboardView />}
+        {activeTab === 'list' && <AssetListView />}
+        {activeTab === 'form' && <AssetFormView />}
+      </main>
+    </div>
+  );
+}
